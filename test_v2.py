@@ -1,40 +1,34 @@
-#!/usr/bin/env python
+# Copyright 2014, Doug Wiegley (dougwig), A10 Networks
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
 
-import argparse
 import json
 import os
-import re
-import subprocess
-import tempfile
-import time
-import uuid
 
-#import local_env as e
 import requests
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument('-1', '--v1', help='use lbaas v1 api')
-parser.add_argument('-2', '--v2', help='use lbaas v2 api')
-parser.parse_args()
+import test_lb_base as lb
 
 
-def find(str, regex):
-    m = re.search(regex, str, re.MULTILINE)
-    if m is not None:
-        return m.group(1)
-    else:
-        return ""
-
-
-def auth_token():
-    return os.popen("keystone token-get --wrap 0 | grep ' id ' | awk '{print $4}'").read().strip()
+def hack_auth_token():
+    c = "keystone token-get --wrap 0 | grep ' id ' | awk '{print $4}'"
+    return os.popen(c).read().strip()
 
 
 def hack_pool_create(name, lb_method, protocol):
     url = 'http://localhost:9696/v2.0/lbaas/pools.json'
     headers = {
-        'X-Auth-Token': auth_token(),
+        'X-Auth-Token': hack_auth_token(),
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'User-Agent': 'python-neutronclient',
@@ -51,40 +45,15 @@ def hack_pool_create(name, lb_method, protocol):
     return r.json()
 
 
-class NeutronLB(object):
+class NeutronLBV2(lb.NeutronBaseLB):
 
-    def __init__(self, lb_method='ROUND_ROBIN', protocol='HTTP'):
-        self.instance_subnet_id = self.get_subnet_id(e.INSTANCE_NETWORK_NAME)
-        self.lb_subnet_id = self.get_subnet_id(e.LB_NETWORK_NAME)
-        self.pool_name = self._random_hex()
-        self.lb_pool_create(self.pool_name, self.instance_subnet_id,
-                            lb_method, protocol)
-        self.members = {}
-
-    def _random_hex(self):
-        return uuid.uuid4().hex[0:12]
-
-    def _neutron(self, cmd):
-        print("NEUTRON: ", cmd)
-        z = subprocess.check_output(["neutron"] + cmd)
-        print("result:\n", z)
-        return z
-
-    def _wait_for_completion(self, cmd):
-        start = time.time()
-        now = start
-        r = ''
-        while ((now - start) < 10):
-            r = self._neutron(cmd)
-            if find(r, "(PENDING)") != "PENDING":
-                break
-
-        #if find(r, "(ACTIVE)") == "":
-        #    raise "error: action did not complete successfully"
-
-    def get_subnet_id(self, network_name):
-        r = self._neutron(['net-show', network_name])
-        return find(r, "^\| subnets.*\| ([^\s]+)")
+    # def __init__(self):
+    #     self.instance_subnet_id = self.get_subnet_id(e.INSTANCE_NETWORK_NAME)
+    #     self.lb_subnet_id = self.get_subnet_id(e.LB_NETWORK_NAME)
+    #     self.pool_name = self._random_hex()
+    #     self.lb_pool_create(self.pool_name, self.instance_subnet_id,
+    #                         lb_method, protocol)
+    #     self.members = {}
 
     # method: None, ROUND_ROBIN, LEAST_CONNECTIONS, SOURCE_IP
     # protocol: HTTP, HTTPS, TCP
@@ -93,7 +62,7 @@ class NeutronLB(object):
         r = hack_pool_create(self.pool_name, method, protocol)
         print(r)
         self.pool_id = r['pool']['id']
-        #self._neutron(['lbaas-pool-create', '--name', pool_name,
+        # self._neutron(['lbaas-pool-create', '--name', pool_name,
         #               '--lb-algorithm', method, '--protocol', protocol,
         #               '--subnet-id', subnet_id])
         self._wait_for_completion(['lbaas-pool-show', pool_name])
@@ -107,14 +76,17 @@ class NeutronLB(object):
     def vip_create(self, port=80, protocol='HTTP', persistence=None):
         self.vip_name = self._random_hex()
 
-        a = ['lbaas-loadbalancer-create', self.vip_name, self.instance_subnet_id]
+        a = ['lbaas-loadbalancer-create',
+             self.vip_name,
+             self.instance_subnet_id]
         r = self._neutron(a)
-        self.vip_id = find(r, "^\| id.*\| ([^\s]+)")
-        self.vip_ip = find(r, "^\| address.*\| ([^\s]+)")
+        self.vip_id = self._find(r, "^\| id.*\| ([^\s]+)")
+        self.vip_ip = self._find(r, "^\| address.*\| ([^\s]+)")
         print("INTERNAL VIP_IP ", self.vip_ip)
         self._wait_for_completion(['lbaas-loadbalancer-show', self.vip_name])
 
-        a = ['lbaas-listener-create', '--loadbalancer-id', self.vip_id, '--protocol', protocol,
+        a = ['lbaas-listener-create', '--loadbalancer-id', self.vip_id,
+             '--protocol', protocol,
              '--protocol-port', str(port), '--default-pool-id', self.pool_id]
 
 #        if persistence is not None:
@@ -125,20 +97,22 @@ class NeutronLB(object):
 #            else:
 #                a.append("type=%s" % persistence)
         r = self._neutron(a)
-        # port_id = find(r, "^\| port_id.*\| ([^\s]+)")
-        #self._wait_for_completion(['lbaas-listener-show', self.vip_name])
+        # port_id = self._find(r, "^\| port_id.*\| ([^\s]+)")
+        self._wait_for_completion(['lbaas-listener-show', self.vip_name])
 
     def vip_destroy(self):
         self._neutron(['lbaas-vip-delete', self.vip_name])
 
     def member_create(self, ip_address, port=80):
-        r = self._neutron(['lbaas-member-create', '--subnet-id', self.instance_subnet_id, '--address', ip_address,
+        r = self._neutron(['lbaas-member-create',
+                           '--subnet-id', self.instance_subnet_id,
+                           '--address', ip_address,
                            '--protocol-port', str(port), self.pool_name])
-        print "MEMBER = ", r
-        member_id = find(r, "^\| id.*\| ([^\s]+)")
-        self._wait_for_completion(['lbaas-member-show', member_id, self.pool_name])
+        print("MEMBER = ", r)
+        member_id = self._find(r, "^\| id.*\| ([^\s]+)")
+        self._wait_for_completion(['lbaas-member-show', member_id,
+                                   self.pool_name])
         self.members[ip_address] = member_id
-
 
     def member_destroy(self, ip_address):
         self._neutron(['lbaas-member-delete', self.members[ip_address]])
@@ -152,27 +126,24 @@ class NeutronLB(object):
                            '--max-retries', str(retries),
                            '--timeout', str(timeout),
                            '--type', mon_type])
-        self.monitor_id = find(r, "^\| id.*\| ([^\s]+)")
+        self.monitor_id = self._find(r, "^\| id.*\| ([^\s]+)")
 
     def monitor_destroy(self):
         self._neutron(['lbaas-healthmonitor-delete', self.monitor_id])
 
     def monitor_associate(self):
-        #r = self._neutron(['lbaas-healthmonitor-associate', self.monitor_id,
-        #                   self.pool_name])
-        #assert r.strip() == "Associated health monitor %s" % self.monitor_id
-        pass
+        r = self._neutron(['lbaas-healthmonitor-associate', self.monitor_id,
+                          self.pool_name])
+        assert r.strip() == "Associated health monitor %s" % self.monitor_id
 
     def monitor_disassociate(self):
-        #self._neutron(['lbaas-healthmonitor-disassociate', self.monitor_id,
-        #               self.pool_name])
-        pass
+        self._neutron(['lbaas-healthmonitor-disassociate', self.monitor_id,
+                      self.pool_name])
 
     def destroy(self):
         self.monitor_disassociate()
         self.monitor_destroy()
-        member_list = [e.MEMBER1_IP, e.MEMBER2_IP]
-        for ip in member_list:
+        for ip in self.members.keys():
             self.member_destroy(ip)
         self.vip_destroy()
         self.pool_delete()
@@ -182,18 +153,8 @@ class NeutronLB(object):
 # Tests
 #
 
-# def test_pool_create():
-#     lb = NeutronLB()
-# def test_pool_delete():
-#     lb = NeutronLB()
-#     lb.pool_delete()
-# def test_vip_create():
-#     lb = NeutronLB()
-#     lb.vip_create()
-
-
-def setup_lb(lb_method, protocol, persistence):
-    lb = NeutronLB(lb_method=lb_method, protocol=protocol)
+def setup_lb(member_list, lb_method, protocol, persistence):
+    lb = NeutronLBV2(lb_method=lb_method, protocol=protocol)
 
     if protocol == 'HTTP':
         port = 80
@@ -207,7 +168,6 @@ def setup_lb(lb_method, protocol, persistence):
 
     lb.vip_create(port=port, protocol=protocol, persistence=persistence)
 
-    member_list = [e.MEMBER1_IP, e.MEMBER2_IP]
     for ip in member_list:
         lb.member_create(ip)
 
@@ -216,8 +176,7 @@ def setup_lb(lb_method, protocol, persistence):
     return lb
 
 
-def pull_data(url_base, vip_ip):
-    member_list = [e.MEMBER1_IP, e.MEMBER2_IP]
+def pull_data(member_list, url_base, vip_ip):
     members = {}
     for ip in member_list:
         members[ip] = requests.get("http://%s/" % ip).text
@@ -236,8 +195,8 @@ def pull_data(url_base, vip_ip):
     assert matching_data
 
 
-def end_to_end(lb_method, protocol, persistence, url_base):
-    e.demo_creds()
+def end_to_end(member_list, lb_method, protocol, persistence, url_base,
+               pull_traffic=False):
 
     # Step 1, setup LB via neutron
     lb = setup_lb(lb_method, protocol, persistence)
@@ -246,48 +205,42 @@ def end_to_end(lb_method, protocol, persistence, url_base):
     # verify_ax('lb')
 
     # Step 3, pull some data through the LB and verify
-    # pull_data(url_base, lb.vip_ip)
+    pull_data(url_base, lb.vip_ip)
 
     # Whoa, all done, success.
-#    lb.destroy()
+    lb.destroy()
 
     # method: None, ROUND_ROBIN, LEAST_CONNECTIONS, SOURCE_IP
     # protocol: HTTP, HTTPS, TCP
     # protocol: TCP, HTTP, HTTPS
     # persistence: None, HTTP_COOKIE, SOURCE_IP, APP_COOKIE
 
-def test_lb():
-    end_to_end('ROUND_ROBIN', 'HTTP', None, 'http://%s/')
+
+def test_lb(member_list, pull_data):
+    end_to_end(member_list, 'ROUND_ROBIN', 'HTTP', None, 'http://%s/',
+               pull_traffic=pull_data)
 
 
-# def test_https():
-#     end_to_end('SOURCE_IP', 'HTTPS', 'SOURCE_IP', 'https://%s/')
-
-
-# def test_alt_lb():
-#     end_to_end('LEAST_CONNECTIONS', 'HTTP', 'HTTP_COOKIE', 'http://%s/')
-
-
-def test_lb_matrix():
+def test_lb_matrix(member_list, pull_data):
     protocols = [
         ('HTTP', 'http://%s/'),
         ('TCP', 'http://%s:4040/'),
         ('HTTPS', 'https://%s/')
     ]
     methods = ['ROUND_ROBIN', 'LEAST_CONNECTIONS', 'SOURCE_IP']
-    #persists = [None, 'HTTP_COOKIE', 'SOURCE_IP']
-    persists = [None]
+    persists = [None, 'HTTP_COOKIE', 'SOURCE_IP']
     for protocol, url_base in protocols:
         for method in methods:
             for persistence in persists:
-                end_to_end(method, protocol, persistence, url_base)
+                end_to_end(member_list, method, protocol, persistence,
+                           url_base, pull_traffic=pull_data)
 
 
-def test_order_and_deferred():
+def test_order_and_deferred(member_list, pull_data):
     raise "fail"
 
 
 def run_tests(parser):
-    pass
-
-
+    # test_lb([parser.member1, parser.member2], parser.pull_data)
+    test_lb_matrix([parser.member1, parser.member2], parser.pull_data)
+    test_order_and_deferred([parser.member1, parser.member2], parser.pull_data)

@@ -1,13 +1,19 @@
+# Copyright 2014, Doug Wiegley (dougwig), A10 Networks
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
 
-import os
-import re
 import requests
-import subprocess
-import tempfile
-import time
-import uuid
 
-#import local_env as e
 import test_lb_base as lb
 
 
@@ -47,9 +53,9 @@ class NeutronLBV1(lb.NeutronBaseLB):
             else:
                 a.append("type=%s" % persistence)
         r = self._neutron(a)
-        # port_id = find(r, "^\| port_id.*\| ([^\s]+)")
-        self.vip_id = find(r, "^\| id.*\| ([^\s]+)")
-        self.vip_ip = find(r, "^\| address.*\| ([^\s]+)")
+        # port_id = self._find(r, "^\| port_id.*\| ([^\s]+)")
+        self.vip_id = self._find(r, "^\| id.*\| ([^\s]+)")
+        self.vip_ip = self._find(r, "^\| address.*\| ([^\s]+)")
         print("INTERNAL VIP_IP ", self.vip_ip)
         self._wait_for_completion(['lb-vip-show', self.vip_name])
 
@@ -59,7 +65,7 @@ class NeutronLBV1(lb.NeutronBaseLB):
     def member_create(self, ip_address, port=80):
         r = self._neutron(['lb-member-create', '--address', ip_address,
                            '--protocol-port', str(port), self.pool_name])
-        member_id = find(r, "^\| id.*\| ([^\s]+)")
+        member_id = self._find(r, "^\| id.*\| ([^\s]+)")
         self._wait_for_completion(['lb-member-show', member_id])
         self.members[ip_address] = member_id
 
@@ -75,7 +81,7 @@ class NeutronLBV1(lb.NeutronBaseLB):
                            '--max-retries', str(retries),
                            '--timeout', str(timeout),
                            '--type', mon_type])
-        self.monitor_id = find(r, "^\| id.*\| ([^\s]+)")
+        self.monitor_id = self._find(r, "^\| id.*\| ([^\s]+)")
 
     def monitor_destroy(self):
         self._neutron(['lb-healthmonitor-delete', self.monitor_id])
@@ -92,20 +98,14 @@ class NeutronLBV1(lb.NeutronBaseLB):
     def destroy(self):
         self.monitor_disassociate()
         self.monitor_destroy()
-        member_list = [e.MEMBER1_IP, e.MEMBER2_IP]
-        for ip in member_list:
+        for ip in self.members.keys():
             self.member_destroy(ip)
         self.vip_destroy()
         self.pool_delete()
 
 
-
-#
-# Tests
-#
-
-def setup_lb(lb_method, protocol, persistence):
-    lb = NeutronLB(lb_method=lb_method, protocol=protocol)
+def setup_lb(member_list, lb_method, protocol, persistence):
+    lb = NeutronLBV1(lb_method=lb_method, protocol=protocol)
 
     if protocol == 'HTTP':
         port = 80
@@ -119,7 +119,6 @@ def setup_lb(lb_method, protocol, persistence):
 
     lb.vip_create(port=port, protocol=protocol, persistence=persistence)
 
-    member_list = [e.MEMBER1_IP, e.MEMBER2_IP]
     for ip in member_list:
         lb.member_create(ip)
 
@@ -128,47 +127,44 @@ def setup_lb(lb_method, protocol, persistence):
     return lb
 
 
-def pull_data(url_base, vip_ip):
-    member_list = [e.MEMBER1_IP, e.MEMBER2_IP]
+def pull_data(member_list, url_base, vip_ip):
     members = {}
-    # for ip in member_list:
-    #     members[ip] = requests.get("http://%s/" % ip).text
+    for ip in member_list:
+        members[ip] = requests.get("http://%s/" % ip).text
 
     url = url_base % vip_ip
     print("LB URL %s", url)
     lb_data = requests.get(url, verify=False).text
     print("DATA LB ++%s++" % lb_data)
 
-    # matching_data = False
-    # for ip, data in members.items():
-    #     if data == lb_data:
-    #         matching_data = True
-    #         break
+    matching_data = False
+    for ip, data in members.items():
+        if data == lb_data:
+            matching_data = True
+            break
 
-    # assert matching_data
-    if lb_data == "":
-        raise "failed to pull data"
+    assert(matching_data)
 
 
-def end_to_end(lb_method, protocol, persistence, url_base):
-    e.demo_creds()
-
+def end_to_end(member_list, lb_method, protocol, persistence, url_base,
+               pull_traffic=False):
     # Step 1, setup LB via neutron
-    lb = setup_lb(lb_method, protocol, persistence)
+    lb = setup_lb(member_list, lb_method, protocol, persistence)
 
     # Step 3, pull some data through the LB and verify
-    if pull_data_arg:
-        pull_data(url_base, lb.vip_ip)
+    if pull_traffic:
+        pull_data(member_list, url_base, lb.vip_ip)
 
     # Whoa, all done, success.
     lb.destroy()
 
 
-def test_lb():
-    end_to_end('ROUND_ROBIN', 'HTTP', None, 'http://%s/')
+def test_lb(member_list, pull_data):
+    end_to_end(member_list, 'ROUND_ROBIN', 'HTTP', None, 'http://%s/',
+               pull_traffic=pull_data)
 
 
-def test_lb_matrix():
+def test_lb_matrix(member_list, pull_data):
     protocols = [
         ('HTTP', 'http://%s/'),
         ('TCP', 'http://%s:4040/'),
@@ -179,8 +175,10 @@ def test_lb_matrix():
     for protocol, url_base in protocols:
         for method in methods:
             for persistence in persists:
-                end_to_end(method, protocol, persistence, url_base)
+                end_to_end(member_list, method, protocol, persistence,
+                           url_base, pull_traffic=pull_data)
+
 
 def run_tests(parser):
-    #test_lb()
-    test_lb_matrix()
+    # test_lb([parser.member1, parser.member2], parser.pull_data)
+    test_lb_matrix([parser.member1, parser.member2], parser.pull_data)
