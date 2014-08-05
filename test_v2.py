@@ -9,7 +9,7 @@ import tempfile
 import time
 import uuid
 
-import local_env as e
+#import local_env as e
 import requests
 
 
@@ -287,7 +287,7 @@ def test_order_and_deferred():
     raise "fail"
 
 
-def run_tests():
+def run_tests(parser):
     pass
 
 

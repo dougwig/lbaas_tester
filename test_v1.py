@@ -7,7 +7,7 @@ import tempfile
 import time
 import uuid
 
-import local_env as e
+#import local_env as e
 import test_lb_base as lb
 
 
@@ -181,6 +181,6 @@ def test_lb_matrix():
             for persistence in persists:
                 end_to_end(method, protocol, persistence, url_base)
 
-def run_tests():
+def run_tests(parser):
     #test_lb()
     test_lb_matrix()

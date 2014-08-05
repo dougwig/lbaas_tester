@@ -8,8 +8,8 @@ PATH_TO_DEMO_OPENRC = os.path.join(os.environ['HOME'], 'demo-openrc.sh')
 INSTANCE_NETWORK_NAME = 'private'
 LB_NETWORK_NAME = 'public'
 
-MEMBER1_IP = '192.168.2.62'
-MEMBER2_IP = '192.168.2.61'
+# MEMBER1_IP = '192.168.2.62'
+# MEMBER2_IP = '192.168.2.61'
 
 
 def source_env(path):
