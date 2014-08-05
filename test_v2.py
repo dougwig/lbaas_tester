@@ -20,94 +20,120 @@ import requests
 import test_lb_base as lb
 
 
-def hack_auth_token():
-    c = "keystone token-get --wrap 0 | grep ' id ' | awk '{print $4}'"
-    return os.popen(c).read().strip()
+# def hack_auth_token():
+#     c = "keystone token-get --wrap 0 | grep ' id ' | awk '{print $4}'"
+#     return os.popen(c).read().strip()
 
 
-def hack_pool_create(name, lb_method, protocol):
-    url = 'http://localhost:9696/v2.0/lbaas/pools.json'
-    headers = {
-        'X-Auth-Token': hack_auth_token(),
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'User-Agent': 'python-neutronclient',
-    }
-    params = {
-        'pool': {
-            'lb_algorithm': lb_method,
-            'protocol': protocol,
-            'name': name,
-        }
-    }
+# def hack_pool_create(name, lb_method, protocol):
+#     url = 'http://localhost:9696/v2.0/lbaas/pools.json'
+#     headers = {
+#         'X-Auth-Token': hack_auth_token(),
+#         'Content-Type': 'application/json',
+#         'Accept': 'application/json',
+#         'User-Agent': 'python-neutronclient',
+#     }
+#     params = {
+#         'pool': {
+#             'lb_algorithm': lb_method,
+#             'protocol': protocol,
+#             'name': name,
+#         }
+#     }
 
-    r = requests.post(url, data=json.dumps(params), headers=headers)
-    return r.json()
+#     r = requests.post(url, data=json.dumps(params), headers=headers)
+#     return r.json()
 
 
 class NeutronLBV2(lb.NeutronBaseLB):
 
-    # def __init__(self):
-    #     self.instance_subnet_id = self.get_subnet_id(e.INSTANCE_NETWORK_NAME)
-    #     self.lb_subnet_id = self.get_subnet_id(e.LB_NETWORK_NAME)
-    #     self.pool_name = self._random_hex()
-    #     self.lb_pool_create(self.pool_name, self.instance_subnet_id,
-    #                         lb_method, protocol)
-    #     self.members = {}
-
     # method: None, ROUND_ROBIN, LEAST_CONNECTIONS, SOURCE_IP
     # protocol: HTTP, HTTPS, TCP
-    def lb_pool_create(self, pool_name, subnet_id, method='ROUND_ROBIN',
-                       protocol='HTTP'):
-        r = hack_pool_create(self.pool_name, method, protocol)
-        print(r)
-        self.pool_id = r['pool']['id']
-        # self._neutron(['lbaas-pool-create', '--name', pool_name,
-        #               '--lb-algorithm', method, '--protocol', protocol,
-        #               '--subnet-id', subnet_id])
-        self._wait_for_completion(['lbaas-pool-show', pool_name])
+    def pool_create(self, method='ROUND_ROBIN', protocol='HTTP'):
+        # r = hack_pool_create(self.pool_name, method, protocol)
+        # self.pool_id = r['pool']['id']
+        a = ['lbaas-pool-create',
+             '--lb-algorithm', method,
+             '--protocol', protocol,
+             '--subnet-id', self.instance_subnet_id]
+        if hm_id:
+            a += ['--healthmonitor-id', hm_id]
+        if sp:
+            a += ['--session-persistence', sp]
+        a += [self.pool_name]
+        r = self._neutron(a)
+        self.pool_id = self._find(r, "^\| id.*\| ([^\s]+)")
+        self._wait_for_completion(['lbaas-pool-show', self.pool_name])
 
     def pool_delete(self):
         r = self._neutron(['lbaas-pool-delete', self.pool_name])
         assert r.strip() == "Deleted pool: %s" % self.pool_name
 
+    def loadbalancer_create(self):
+        self.loadbalancer_name = todo
+        a = ['lbaas-loadbalancer-create', self.loadbalancer_name,
+             self.lb_subnet_id]
+        r = self._neutron(a)
+        self.loadbalancer_id = self._find(r, "^\| id.*\| ([^\s]+)")
+        self._wait_for_completion(['lbaas-loadbalancer-show',
+                                  self.loadbalancer_id])
+
+    def loadbalancer_delete(self):
+        self._neutron(['lbaas-listener-delete', self.load_balancer_id])
+
+    def listener_create(self, protocol='HTTP', port=80):
+        a = ['lbaas-listener-create',
+             '--lb-algorithm', method,
+             '--protocol', protocol,
+             '--subnet-id', self.instance_subnet_id]
+        if self.load_balancer_id:
+            a += [todo]
+        if self.pool_id:
+            a += [todo]
+        a += ['--protocol', protocol,
+              '--port', str(port)]
+        r = self._neutron(a)
+        self.listener_id = self._find(r, "^\| id.*\| ([^\s]+)")
+        self._wait_for_completion(['lbaas-listener-show', self.listener_id])
+
+    def listener_delete(self):
+        self._neutron(['lbaas-listener-delete', self.listener_id])
+
+
     # protocol: TCP, HTTP, HTTPS
     # persistence: None, HTTP_COOKIE, SOURCE_IP, APP_COOKIE
-    def vip_create(self, port=80, protocol='HTTP', persistence=None):
-        self.vip_name = self._random_hex()
+#     def vip_create(self, port=80, protocol='HTTP', persistence=None):
+#         self.vip_name = self._random_hex()
 
-        a = ['lbaas-loadbalancer-create',
-             self.vip_name,
-             self.instance_subnet_id]
-        r = self._neutron(a)
-        self.vip_id = self._find(r, "^\| id.*\| ([^\s]+)")
-        self.vip_ip = self._find(r, "^\| address.*\| ([^\s]+)")
-        print("INTERNAL VIP_IP ", self.vip_ip)
-        self._wait_for_completion(['lbaas-loadbalancer-show', self.vip_name])
+#         a = ['lbaas-loadbalancer-create',
+#              self.vip_name,
+#              self.instance_subnet_id]
+#         r = self._neutron(a)
+#         self.vip_id = self._find(r, "^\| id.*\| ([^\s]+)")
+#         self.vip_ip = self._find(r, "^\| address.*\| ([^\s]+)")
+#         print("INTERNAL VIP_IP ", self.vip_ip)
+#         self._wait_for_completion(['lbaas-loadbalancer-show', self.vip_name])
 
-        a = ['lbaas-listener-create', '--loadbalancer-id', self.vip_id,
-             '--protocol', protocol,
-             '--protocol-port', str(port), '--default-pool-id', self.pool_id]
+#         a = ['lbaas-listener-create', '--loadbalancer-id', self.vip_id,
+#              '--protocol', protocol,
+#              '--protocol-port', str(port), '--default-pool-id', self.pool_id]
 
-#        if persistence is not None:
-#            a.append('--session-persistence')
-#            a.append('type=dict')
-#            if persistence is 'APP_COOKIE':
-#                a.append("type=%s,cookie_name=mycookie" % persistence)
-#            else:
-#                a.append("type=%s" % persistence)
-        r = self._neutron(a)
-        # port_id = self._find(r, "^\| port_id.*\| ([^\s]+)")
-        self._wait_for_completion(['lbaas-listener-show', self.vip_name])
-
-    def vip_destroy(self):
-        self._neutron(['lbaas-vip-delete', self.vip_name])
+# #        if persistence is not None:
+# #            a.append('--session-persistence')
+# #            a.append('type=dict')
+# #            if persistence is 'APP_COOKIE':
+# #                a.append("type=%s,cookie_name=mycookie" % persistence)
+# #            else:
+# #                a.append("type=%s" % persistence)
+#         r = self._neutron(a)
+#         # port_id = self._find(r, "^\| port_id.*\| ([^\s]+)")
+#         self._wait_for_completion(['lbaas-listener-show', self.vip_name])
 
     def member_create(self, ip_address, port=80):
         r = self._neutron(['lbaas-member-create',
-                           '--subnet-id', self.instance_subnet_id,
                            '--address', ip_address,
-                           '--protocol-port', str(port), self.pool_name])
+                           '--protocol-port', str(port),
+                           self.pool_name])
         print("MEMBER = ", r)
         member_id = self._find(r, "^\| id.*\| ([^\s]+)")
         self._wait_for_completion(['lbaas-member-show', member_id,
@@ -115,14 +141,16 @@ class NeutronLBV2(lb.NeutronBaseLB):
         self.members[ip_address] = member_id
 
     def member_destroy(self, ip_address):
-        self._neutron(['lbaas-member-delete', self.members[ip_address]])
+        self._neutron(['lbaas-member-delete', self.members[ip_address]],
+                       self.pool_name)
 
     # expected: 200, 200-299, 200,201
     # http_method: GET, POST
     # url_path: URL, "/"
     # mon_type: PING, TCP, HTTP, HTTPS
     def monitor_create(self, delay=5, retries=5, timeout=5, mon_type='HTTP'):
-        r = self._neutron(['lbaas-healthmonitor-create', '--delay', str(delay),
+        r = self._neutron(['lbaas-healthmonitor-create',
+                           '--delay', str(delay),
                            '--max-retries', str(retries),
                            '--timeout', str(timeout),
                            '--type', mon_type])
@@ -131,17 +159,7 @@ class NeutronLBV2(lb.NeutronBaseLB):
     def monitor_destroy(self):
         self._neutron(['lbaas-healthmonitor-delete', self.monitor_id])
 
-    def monitor_associate(self):
-        r = self._neutron(['lbaas-healthmonitor-associate', self.monitor_id,
-                          self.pool_name])
-        assert r.strip() == "Associated health monitor %s" % self.monitor_id
-
-    def monitor_disassociate(self):
-        self._neutron(['lbaas-healthmonitor-disassociate', self.monitor_id,
-                      self.pool_name])
-
     def destroy(self):
-        self.monitor_disassociate()
         self.monitor_destroy()
         for ip in self.members.keys():
             self.member_destroy(ip)
