@@ -149,12 +149,9 @@ class NeutronLBV2(lb.NeutronBaseLB):
         self.pool_delete()
 
 
-#
-# Tests
-#
-
-def setup_lb(member_list, lb_method, protocol, persistence):
-    lb = NeutronLBV2(lb_method=lb_method, protocol=protocol)
+def setup_lb(member_list, opts, lb_method, protocol, persistence):
+    lb = NeutronLBV2(opts.lb_subnet_name, opts.instance_subnet_name)
+    lb.pool_create(lb_method, protocol)
 
     if protocol == 'HTTP':
         port = 80
@@ -195,33 +192,24 @@ def pull_data(member_list, url_base, vip_ip):
     assert matching_data
 
 
-def end_to_end(member_list, lb_method, protocol, persistence, url_base,
-               pull_traffic=False):
+def end_to_end(member_list, opts, lb_method, protocol, persistence, url_base):
 
     # Step 1, setup LB via neutron
-    lb = setup_lb(lb_method, protocol, persistence)
-
-    # Step 2, grab the configuration from the AX and verify
-    # verify_ax('lb')
+    lb = setup_lb(lb_method, protocol, persistence, opts)
 
     # Step 3, pull some data through the LB and verify
-    pull_data(url_base, lb.vip_ip)
+    if opts.pull_data:
+        pull_data(url_base, lb.vip_ip)
 
     # Whoa, all done, success.
     lb.destroy()
 
-    # method: None, ROUND_ROBIN, LEAST_CONNECTIONS, SOURCE_IP
-    # protocol: HTTP, HTTPS, TCP
-    # protocol: TCP, HTTP, HTTPS
-    # persistence: None, HTTP_COOKIE, SOURCE_IP, APP_COOKIE
+
+def test_lb(member_list, opts):
+    end_to_end(member_list, opts, 'ROUND_ROBIN', 'HTTP', None, 'http://%s/')
 
 
-def test_lb(member_list, pull_data):
-    end_to_end(member_list, 'ROUND_ROBIN', 'HTTP', None, 'http://%s/',
-               pull_traffic=pull_data)
-
-
-def test_lb_matrix(member_list, pull_data):
+def test_lb_matrix(member_list, opts):
     protocols = [
         ('HTTP', 'http://%s/'),
         ('TCP', 'http://%s:4040/'),
@@ -232,15 +220,14 @@ def test_lb_matrix(member_list, pull_data):
     for protocol, url_base in protocols:
         for method in methods:
             for persistence in persists:
-                end_to_end(member_list, method, protocol, persistence,
-                           url_base, pull_traffic=pull_data)
+                end_to_end(member_list, opts, method, protocol, persistence,
+                           url_base)
 
 
-def test_order_and_deferred(member_list, pull_data):
+def test_order_and_deferred(member_list, opts):
     raise "fail"
 
 
 def run_tests(parser):
-    # test_lb([parser.member1, parser.member2], parser.pull_data)
-    test_lb_matrix([parser.member1, parser.member2], parser.pull_data)
-    test_order_and_deferred([parser.member1, parser.member2], parser.pull_data)
+    for t in [test_lb, test_lb_matrix, test_order_and_deferred]:
+        t([parser.member1, parser.member2], parser)

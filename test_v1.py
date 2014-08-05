@@ -19,19 +19,13 @@ import test_lb_base as lb
 
 class NeutronLBV1(lb.NeutronBaseLB):
 
-    def __init__(self, lb_method='ROUND_ROBIN', protocol='HTTP'):
-        super(NeutronLBV1, self).__init__()
-        self.lb_pool_create(self.pool_name, self.instance_subnet_id,
-                            lb_method, protocol)
-
     # method: None, ROUND_ROBIN, LEAST_CONNECTIONS, SOURCE_IP
     # protocol: HTTP, HTTPS, TCP
-    def lb_pool_create(self, pool_name, subnet_id, method='ROUND_ROBIN',
-                       protocol='HTTP'):
-        self._neutron(['lb-pool-create', '--name', pool_name,
+    def pool_create(self, method='ROUND_ROBIN', protocol='HTTP'):
+        self._neutron(['lb-pool-create', '--name', self.pool_name,
                        '--lb-method', method, '--protocol', protocol,
-                       '--subnet-id', subnet_id])
-        self._wait_for_completion(['lb-pool-show', pool_name])
+                       '--subnet-id', self.instance_subnet_id])
+        self._wait_for_completion(['lb-pool-show', self.pool_name])
 
     def pool_delete(self):
         r = self._neutron(['lb-pool-delete', self.pool_name])
@@ -104,8 +98,9 @@ class NeutronLBV1(lb.NeutronBaseLB):
         self.pool_delete()
 
 
-def setup_lb(member_list, lb_method, protocol, persistence):
-    lb = NeutronLBV1(lb_method=lb_method, protocol=protocol)
+def setup_lb(member_list, opts, lb_method, protocol, persistence):
+    lb = NeutronLBV1(opts.lb_subnet_name, opts.instance_subnet_name)
+    lb.pool_create(lb_method, protocol)
 
     if protocol == 'HTTP':
         port = 80
@@ -146,25 +141,23 @@ def pull_data(member_list, url_base, vip_ip):
     assert(matching_data)
 
 
-def end_to_end(member_list, lb_method, protocol, persistence, url_base,
-               pull_traffic=False):
+def end_to_end(member_list, opts, lb_method, protocol, persistence, url_base):
     # Step 1, setup LB via neutron
     lb = setup_lb(member_list, lb_method, protocol, persistence)
 
     # Step 3, pull some data through the LB and verify
-    if pull_traffic:
+    if opts.pull_data:
         pull_data(member_list, url_base, lb.vip_ip)
 
     # Whoa, all done, success.
     lb.destroy()
 
 
-def test_lb(member_list, pull_data):
-    end_to_end(member_list, 'ROUND_ROBIN', 'HTTP', None, 'http://%s/',
-               pull_traffic=pull_data)
+def test_lb(member_list, opts):
+    end_to_end(member_list, opts, 'ROUND_ROBIN', 'HTTP', None, 'http://%s/')
 
 
-def test_lb_matrix(member_list, pull_data):
+def test_lb_matrix(member_list, opts):
     protocols = [
         ('HTTP', 'http://%s/'),
         ('TCP', 'http://%s:4040/'),
@@ -175,10 +168,10 @@ def test_lb_matrix(member_list, pull_data):
     for protocol, url_base in protocols:
         for method in methods:
             for persistence in persists:
-                end_to_end(member_list, method, protocol, persistence,
-                           url_base, pull_traffic=pull_data)
+                end_to_end(member_list, opts, method, protocol, persistence,
+                           url_base)
 
 
 def run_tests(parser):
-    # test_lb([parser.member1, parser.member2], parser.pull_data)
-    test_lb_matrix([parser.member1, parser.member2], parser.pull_data)
+    for t in [test_lb, test_lb_matrix]:
+        t([parser.member1, parser.member2], parser)

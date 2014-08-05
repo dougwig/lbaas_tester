@@ -20,9 +20,9 @@ import uuid
 
 class NeutronBaseLB(object):
 
-    def __init__(self):
-        self.instance_subnet_id = self.get_subnet_id(e.INSTANCE_NETWORK_NAME)
-        self.lb_subnet_id = self.get_subnet_id(e.LB_NETWORK_NAME)
+    def __init__(self, lb_subnet, instance_subnet):
+        self.instance_subnet_id = self.get_subnet_id(instance_subnet)
+        self.lb_subnet_id = self.get_subnet_id(lb_subnet)
         self.pool_name = self._random_hex()
         self.members = {}
 
