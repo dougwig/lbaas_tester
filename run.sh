@@ -1,3 +1,3 @@
 #!/bin/sh
 
-nosetests test_lbaas.py
+python test_lbaas.py $*
